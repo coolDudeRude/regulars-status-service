@@ -133,7 +133,7 @@ def create_status(data: dict):
         player_table.add_column("Name", justify="left")
         player_table.add_column("Ping", justify="right")
         player_table.add_column("PL", justify="right")
-        player_table.add_column("Frags", justify="right")
+        player_table.add_column("Score", justify="right")
         player_table.add_column("Time", justify="right")
 
         for player in data.get("players", []):

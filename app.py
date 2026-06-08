@@ -1,4 +1,5 @@
 import re
+import io
 import json
 import requests
 import logging
@@ -23,6 +24,9 @@ JSON_ENDPOINT = "https://api.regulars.win/servers/{target}"
 USER_AGENTS = ["curl", "wget", "xh", "fetch"]
 CACHE_DIR = Path(".").cwd() / "flask_cache"
 
+# Keep data cached for 30s
+CACHED_DATA_TIMEOUT = 30
+
 config = {
     "CACHE_TYPE": "FileSystemCache",
     "CACHE_DIR": str(CACHE_DIR),
@@ -44,7 +48,7 @@ cache = Cache(app)
 ansi2html_converter = Ansi2HTMLConverter()
 
 
-@cache.memoize(timeout=30)
+@cache.memoize(timeout=CACHED_DATA_TIMEOUT)
 def fetch_server_data(server_name: str):
     logger.info("Cache miss! Fetching fresh data for %s", server_name)
     response = requests.get(JSON_ENDPOINT.format(target=server_name), timeout=5)
@@ -62,92 +66,92 @@ def read_json_file(filename: str):
 
 
 def create_status(data: dict):
-    console = Console(record=True, width=60)
+    buffer = io.StringIO()
+    console = Console(file=buffer, record=True, width=60, force_terminal=True)
 
-    with console.capture() as capture:
-        hostname = data.get("host", "Unknow Server")
-        map_name = data.get("map", "Unknown Map")
-        game_type = data.get("info", {}).get("gametype", "N/A").upper()
-        mod_name = data.get("info", {}).get("mod_name", "N/A")
+    hostname = data.get("host", "Unknow Server")
+    map_name = data.get("map", "Unknown Map")
+    game_type = data.get("info", {}).get("gametype", "N/A").upper()
+    mod_name = data.get("info", {}).get("mod_name", "N/A")
 
-        server_title = f"[bold cyan]{hostname}[/]"
-        p_count = int(data.get("players_count", 0))
-        p_max = int(data.get("players_max", 0))
+    server_title = f"[bold cyan]{hostname}[/]"
+    p_count = int(data.get("players_count", 0))
+    p_max = int(data.get("players_max", 0))
 
-        sv_public = int(data.get("sv_public", 0))
+    sv_public = int(data.get("sv_public", 0))
 
-        if sv_public == 1:
-            public = "YES"
-        else:
-            public = "NO"
+    if sv_public == 1:
+        public = "YES"
+    else:
+        public = "NO"
 
-        cpu_usage = data.get("timing", {}).get("cpu", 0)
-        lost_frames = data.get("timing", {}).get("lost", 0)
-        offset_avg = data.get("timing", {}).get("offset_avg", 0)
-        offset_max = data.get("timing", {}).get("offset_max", 0)
-        offset_sdev = data.get("timing", {}).get("offset_sdev", 0)
+    cpu_usage = data.get("timing", {}).get("cpu", 0)
+    lost_frames = data.get("timing", {}).get("lost", 0)
+    offset_avg = data.get("timing", {}).get("offset_avg", 0)
+    offset_max = data.get("timing", {}).get("offset_max", 0)
+    offset_sdev = data.get("timing", {}).get("offset_sdev", 0)
 
-        meta_table = Table.grid(expand=True)
-        meta_table.add_column(justify="left")
-        meta_table.add_column(justify="left")
-        meta_table.add_column(justify="left")
-        meta_table.add_row(
-            f"[yellow]Map:[/] {map_name}",
-            f"[yellow]Game Type:[/] {game_type}",
-            f"[yellow]Players:[/] {p_count}/{p_max}",
+    meta_table = Table.grid(expand=True)
+    meta_table.add_column(justify="left")
+    meta_table.add_column(justify="left")
+    meta_table.add_column(justify="left")
+    meta_table.add_row(
+        f"[yellow]Map:[/] {map_name}",
+        f"[yellow]Game Type:[/] {game_type}",
+        f"[yellow]Players:[/] {p_count}/{p_max}",
+    )
+    meta_table.add_row(
+        f"[yellow]Mode Name:[/] {mod_name}",
+        f"[yellow]CPU Usage:[/] {cpu_usage}%",
+        f"[yellow]Lost Frames:[/] {lost_frames}%",
+    )
+    meta_table.add_row(
+        f"[yellow]Avg Offset:[/] {offset_avg}ms",
+        f"[yellow]Max Offset:[/] {offset_max}ms",
+        f"[yellow]Stddev Offset:[/] {offset_sdev}",
+    )
+
+    console.print(
+        Panel(
+            meta_table,
+            title=server_title,
+            subtitle=f"Public: {public}",
+            box=box.ROUNDED,
+            border_style="bright_blue",
         )
-        meta_table.add_row(
-            f"[yellow]Mode Name:[/] {mod_name}",
-            f"[yellow]CPU Usage:[/] {cpu_usage}%",
-            f"[yellow]Lost Frames:[/] {lost_frames}%",
-        )
-        meta_table.add_row(
-            f"[yellow]Avg Offset:[/] {offset_avg}ms",
-            f"[yellow]Max Offset:[/] {offset_max}ms",
-            f"[yellow]Stddev Offset:[/] {offset_sdev}",
-        )
+    )
+    console.print("[dim]" + "-" * 60 + "[/]")
 
-        console.print(
-            Panel(
-                meta_table,
-                title=server_title,
-                subtitle=f"Public: {public}",
-                box=box.ROUNDED,
-                border_style="bright_blue",
+    # Player status
+    if p_count != 0:
+        player_table = Table(
+            title=f"Players [{p_count}/{p_max}]",
+            box=box.ROUNDED,
+            border_style="bold magenta",
+            expand=True,
+        )
+        player_table.add_column("Name", justify="left")
+        player_table.add_column("Ping", justify="right")
+        player_table.add_column("PL", justify="right")
+        player_table.add_column("Frags", justify="right")
+        player_table.add_column("Time", justify="right")
+
+        for player in data.get("players", []):
+            if int(player.get("frags", 0)) == -666:
+                score = "[yellow]spectator[/]"
+            else:
+                score = f"[green]{player.get('frags', 0)}[/]"
+
+            player_table.add_row(
+                remove_xoncolors(player.get("name", "Unknown")),
+                f"[green]{player.get('ping', '0')}ms[/]",
+                f"[green]{player.get('pl', '0')}[/]",
+                score,
+                f"[yellow]{player.get('time', '0')}[/]",
             )
-        )
-        console.print("[dim]" + "-" * 60 + "[/]")
+        console.print(player_table)
 
-        # Player status
-        if p_count != 0:
-            player_table = Table(
-                title=f"Players [{p_count}/{p_max}]",
-                box=box.ROUNDED,
-                border_style="bold magenta",
-                expand=True,
-            )
-            player_table.add_column("Name", justify="left")
-            player_table.add_column("Ping", justify="right")
-            player_table.add_column("PL", justify="right")
-            player_table.add_column("Frags", justify="right")
-            player_table.add_column("Time", justify="right")
-
-            for player in data.get("players", []):
-                if int(player.get("frags", 0)) == -666:
-                    score = "[yellow]spectator[/]"
-                else:
-                    score = f"[green]{player.get('frags', 0)}[/]"
-
-                player_table.add_row(
-                    remove_xoncolors(player.get("name", "Unknown")),
-                    f"[green]{player.get('ping', '0')}ms[/]",
-                    f"[green]{player.get('pl', '0')}[/]",
-                    score,
-                    f"[yellow]{player.get('time', '0')}[/]",
-                )
-            console.print(player_table)
-
-    return capture.get()
+    return buffer.getvalue()
 
 
 def status_handler(server_nick: str):
@@ -163,20 +167,43 @@ def status_handler(server_nick: str):
     user_agent = request.headers.get("User-Agent", "").lower()
     target = SERVER_MAP[server_nick]
 
-    try:
-        data = fetch_server_data(target)
-        ansi_status = create_status(data)
+    ansi_cache_key = f"ansi_{server_nick}"
+    html_cache_key = f"html_{server_nick}"
 
-        if any(agent in user_agent for agent in USER_AGENTS):
-            return Response(ansi_status, mimetype="text/plain")
-        else:
-            return Response(ansi2html_converter.convert(ansi_status))
-    except requests.exceptions.ReadTimeout as e:
-        logging.exception("Connection Timeout for %s: %s", target, e)
-        return Response("Server Status temporarily unavaliable.", status=503)
+    ansi_status = cache.get(ansi_cache_key)
+    html_status = cache.get(html_cache_key)
+
+    if ansi_status is None or html_status is None:
+        try:
+            data = fetch_server_data(target)
+            ansi_status = create_status(data)
+            html_status = ansi2html_converter.convert(ansi_status)
+
+            cache.set(ansi_cache_key, ansi_status, timeout=CACHED_DATA_TIMEOUT)
+            cache.set(html_cache_key, html_status, timeout=CACHED_DATA_TIMEOUT)
+
+        except requests.exceptions.ReadTimeout as e:
+            logging.exception("Connection Timeout for %s: %s", target, e)
+            return Response("Server Status Temporarily Unavaliable.", status=503)
+        except requests.exceptions.ConnectionError as e:
+            logger.exception("Failed to establish conncetion for %s: %s", target, e)
+            return Response("Server Status Temporarily Unavaliable.", status=503)
+
+    if any(agent in user_agent for agent in USER_AGENTS):
+        return Response(ansi_status, mimetype="text/plain")
+    else:
+        return Response(html_status)
 
 
 @app.route("/", strict_slashes=False)
+def index():
+    return Response(
+        "I refuse to answer that on the grounds that I don’t want to.\n",
+        status=200,
+        mimetype="text/plain",
+    )
+
+
 @app.route("/status", strict_slashes=False)
 def default_status():
     return status_handler("pub")
